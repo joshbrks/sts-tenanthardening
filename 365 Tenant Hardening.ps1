@@ -1,3 +1,8 @@
+Write-Host "---------------------------------------------" -Foregroundcolor white -BackgroundColor DarkCyan
+Write-Host "Welcome to the STS Tenant Hardening Script." -Foregroundcolor white -BackgroundColor DarkCyan
+Write-Host "---------------------------------------------" -Foregroundcolor white -BackgroundColor DarkCyan
+Write-Host ""
+
 #Obtain Primary Domain
 Connect-AzureAD 
 $domain = ((Get-AzureADTenantDetail).verifieddomains | where {$_._default -eq $true}).name
@@ -7,6 +12,13 @@ Connect-Exchangeonline
 Install-Module MSOnline
 Import-Module MSOnline
 Connect-MsolService
+
+#Disable user consent to apps
+Connect-MgGraph -Scopes "Policy.ReadWrite.Authorization"
+Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
+  "PermissionGrantPoliciesAssigned" = @() }
+Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
+  "PermissionGrantPoliciesAssigned" = @("managePermissionGrantsForSelf.{consent-policy-id}") }
 
 #Set Passwords to Never Expire
 Get-msoluser | set-msoluser -PasswordNeverExpires $true
@@ -114,7 +126,6 @@ New-AntiPhishRule `
 #Create ATP Mailbox
 New-Mailbox -Shared "ATP Mailbox" -DisplayName "ATP Mailbox" -Alias ATP
 $redirect = "atp@" + $domain
-
 
 #Create Safe-Attachment Policy
 New-SafeAttachmentPolicy `
@@ -228,8 +239,6 @@ if ($DKIMopt -contains 'Y') {
         -DomainName $domain `
         -KeySize 2048 `
         -Enabled $true
+    Write-Host "DKIM records will also need to be added if the command failed."
     pause
 }
-
-Write-Host "Disable Org Consent for User apps will still need to be completed."
-Write-Host "DKIM records will also need to be added if the command failed."
