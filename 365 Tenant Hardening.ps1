@@ -17,8 +17,6 @@ Connect-MsolService
 Connect-MgGraph -Scopes "Policy.ReadWrite.Authorization"
 Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
   "PermissionGrantPoliciesAssigned" = @() }
-Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
-  "PermissionGrantPoliciesAssigned" = @("managePermissionGrantsForSelf.{consent-policy-id}") }
 
 #Set Passwords to Never Expire
 Get-msoluser | set-msoluser -PasswordNeverExpires $true
