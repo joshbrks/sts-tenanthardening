@@ -306,11 +306,11 @@ Add-Content -Path $log -Value "-------------------------------------------------
 foreach ($domain in $domainList.name) {
     Add-Content -Path $log -Value "DOMAIN:   $($domain)"
     Add-Content -Path $log -Value ""
-    Add-Content -Path $log -Value "HOST:     Selector1._domainkey."
+    Add-Content -Path $log -Value "HOST:     Selector1._domainkey"
     $s1DKIM = Get-DkimSigningConfig -Identity $domain | Select-Object -ExpandProperty Selector1CNAME
     Add-Content -Path $log -Value "VALUE:    $($s1DKIM)"
     Add-Content -Path $log -Value ""
-    Add-Content -Path $log -Value "HOST:     Selector2._domainkey."
+    Add-Content -Path $log -Value "HOST:     Selector2._domainkey"
     $s2DKIM = Get-DkimSigningConfig -Identity $domain | Select-Object -ExpandProperty Selector2CNAME
     Add-Content -Path $log -Value "VALUE:    $($s2DKIM)"
     Add-Content -Path $log -Value "---------------------------------------------------"
