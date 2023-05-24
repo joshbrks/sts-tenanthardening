@@ -5,29 +5,114 @@ Write-Host ""
 
 #Obtain Primary Domain
 Connect-AzureAD 
-$domain = ((Get-AzureADTenantDetail).verifieddomains | where {$_._default -eq $true}).name
+$primaryDomain = ((Get-AzureADTenantDetail).verifieddomains | where {$_._default -eq $true}).name
 
 Install-Module -Name ExchangeOnlineManagement
-Connect-Exchangeonline
 Install-Module MSOnline
 Import-Module MSOnline
+Connect-Exchangeonline
 Connect-MsolService
+Connect-MgGraph -Scopes "Policy.ReadWrite.Authorization"
+
+#Create LOG file and directory
+$log = "C:\temp\$PrimaryDomain - M365 INFO.log"
+if (Test-Path C:\temp) {  
+  New-Item $log
+}
+else {
+  New-Item C:\temp\ -ItemType Directory
+  New-Item $log
+}
+
+Write-Host "LOG file will be created at $($log). Review this after completion."
+pause
+Add-Content -Path $log -Value "~~~~~~~~TENANT HARDENING LOG FOR $($primaryDomain)~~~~~~~~"
+Add-Content -Path $log -Value ""
+Add-Content -Path $log -Value "Organization settings changed:"
 
 #Disable user consent to apps
-Connect-MgGraph -Scopes "Policy.ReadWrite.Authorization"
-Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
-  "PermissionGrantPoliciesAssigned" = @() }
-Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
-  "PermissionGrantPoliciesAssigned" = @("managePermissionGrantsForSelf.{consent-policy-id}") }
+Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions
+Set-MsolCompanySettings -UsersPermissionToUserConsentToAppEnabled $False 
+Add-Content -Path $log -Value "  - Disabled user consent to apps"
+
+#Set default Usage Location
+Set-MsolCompanySettings -DefaultUsageLocation US
+Add-Content -Path $log -Value "  - Set default usage location to US"
 
 #Set Passwords to Never Expire
-Get-msoluser | set-msoluser -PasswordNeverExpires $true
+$opt = Read-Host -Prompt 'Set passwords to never expire? (Y/N)'
+if ($opt -contains 'Y') {
+  Get-msoluser | set-msoluser -PasswordNeverExpires $true
+  Add-Content -Path $log -Value "  - Set password expiration policy to NEVER EXPIRE."
+}
+else {
+  Add-Content -Path $log -Value "  - Password expiration policy not changed."
+}
+
+Add-Content -Path $log -Value ""
+Add-Content -Path $log -Value "Exchange Admin Center settings changed:"
 
 #Disable Executable Content in Attachments
 New-TransportRule -Name "Block Executable Content" `
 -AttachmentHasExecutableContent $true `
 -StopRuleProcessing $true `
 -DeleteMessage $true
+Add-Content -Path $log -Value "  - Block Executable Content rule created."
+
+#Add External Source Disclaimer Message
+New-TransportRule `
+  -Name "External Email Disclaimer" `
+  -Priority "1" `
+  -Enabled $true `
+  -FromScope "NotInOrganization" `
+  -SentToScope InOrganization `
+  -ApplyHtmlDisclaimerText '<!DOCTYPE html><html><body><table width="100%" border="3" cellspacing="0" cellpadding="4"><tbody><tr><th align="center" style="color:white;" bgcolor="#081d41">EXTERNAL EMAIL</th></tr></tbody></table></body></html><br><br>' `
+  -ApplyHtmlDisclaimerLocation "Prepend" `
+  -ApplyHtmlDisclaimerFallbackAction Wrap `
+  -Comments "This rule adds an external email disclaimer." 
+Add-Content -Path $log -Value "  - External source disclaimer message rule added."
+  
+
+#Block OnMicrosoft Domains
+$BlockedDomains = @("onmicrosoft.com", "mail.onmicrosoft.com")
+#Inbound Rule
+New-TransportRule `
+  -Name "Block Inbound onmicrosoft.com Emails" `
+  -Enabled $true `
+  -StopRuleProcessing $true `
+  -Comments "Block Inbound Emails with onmicrosoft.com or mail.onmicrosoft.com Domains" -SenderDomainIs $BlockedDomains -DeleteMessage:$true
+Add-Content -Path $log -Value "  - Inbound 'OnMicrosoft.com' domain emails blocked."
+  
+#Outbound Rule
+New-TransportRule `
+-Name "Block Outbound onmicrosoft.com Emails" `
+-Enabled $true `
+-Comments "This rule blocks outbound emails with the domains 'onmicrosoft.com' or 'mail.onmicrosoft.com', and rejects the message with an explanation 'You are not allowed to send from this domain (onmicrosoft.com).'" `
+-RejectMessageReasonText "You are not allowed to send from this domain (onmicrosoft.com)." `
+-SenderDomainIs $BlockedDomains `
+-RejectMessageEnhancedStatusCode "5.7.1" `
+-StopRuleProcessing $true `
+-Mode Enforce
+Add-Content -Path $log -Value "  - Outbound 'OnMicrosoft.com' domain emails blocked."
+
+#Disable Protocols
+Get-CASMailboxPlan `
+  -Filter {ImapEnabled -eq "true" -or PopEnabled -eq "true" } `
+  | set-CASMailboxPlan -ImapEnabled $false -PopEnabled $false
+  
+Get-CASMailbox -Filter {ImapEnabled -eq "true" -or PopEnabled -eq "true" } `
+| Select-Object @{n = "Identity"; e = {$_.primarysmtpaddress}} `
+| Set-CASMailbox -ImapEnabled $false -PopEnabled $false
+
+Set-TransportConfig -SmtpClientAuthenticationDisabled $true
+
+Add-Content -Path $log -Value "  - IMAP, POP, and Authenticated SMTP disabled for all users."
+
+#Disable automatic forwarding
+Set-RemoteDomain Default -AutoForwardEnabled $False
+Add-Content -Path $log -Value "  - Automatic forwarding disabled for all users."
+Add-Content -Path $log -Value ""
+Add-Content -Path $log -Value "Security Admin settings changed:"
 
 #Create Anti-Spam policy
 New-HostedContentFilterPolicy `
@@ -55,6 +140,8 @@ New-HostedContentFilterRule STS-Default-Spam `
   -RecipientDomainIs (Get-AcceptedDomain).Name `
   -Enabled $true
 
+Add-Content -Path $log -Value "  - Anti-spam policy created."
+
 #Create Anti-Malware Policy
 New-MalwareFilterPolicy -Name STS-MalwarePolicy `
   -EnableFileFilter $true `
@@ -68,38 +155,7 @@ New-MalwareFilterRule -Name STS-Default-Malware `
   -Enabled $true `
   -RecipientDomainIs (Get-AcceptedDomain).Name
 
-#Add External Source Disclaimer Message
-New-TransportRule `
-  -Name "External Email Disclaimer" `
-  -Priority "1" `
-  -Enabled $true `
-  -FromScope "NotInOrganization" `
-  -SentToScope InOrganization `
-  -ApplyHtmlDisclaimerText '<!DOCTYPE html><html><body><table width="100%" border="3" cellspacing="0" cellpadding="4"><tbody><tr><th align="center" style="color:white;" bgcolor="#081d41">EXTERNAL EMAIL</th></tr></tbody></table></body></html><br><br>' `
-  -ApplyHtmlDisclaimerLocation "Prepend" `
-  -ApplyHtmlDisclaimerFallbackAction Wrap `
-  -Comments "This rule adds an external email disclaimer." 
-  
-
-#Block OnMicrosoft Domains
-$BlockedDomains = @("onmicrosoft.com", "mail.onmicrosoft.com")
-#Inbound Rule
-New-TransportRule `
-  -Name "Block Inbound onmicrosoft.com Emails" `
-  -Enabled $true `
-  -StopRuleProcessing $true `
-  -Comments "Block Inbound Emails with onmicrosoft.com or mail.onmicrosoft.com Domains" -SenderDomainIs $BlockedDomains -DeleteMessage:$true
-  
-#Outbound Rule
-New-TransportRule `
--Name "Block Outbound onmicrosoft.com Emails" `
--Enabled $true `
--Comments "This rule blocks outbound emails with the domains 'onmicrosoft.com' or 'mail.onmicrosoft.com', and rejects the message with an explanation 'You are not allowed to send from this domain (onmicrosoft.com).'" `
--RejectMessageReasonText "You are not allowed to send from this domain (onmicrosoft.com)." `
--SenderDomainIs $BlockedDomains `
--RejectMessageEnhancedStatusCode "5.7.1" `
--StopRuleProcessing $true `
--Mode Enforce
+Add-Content -Path $log -Value "  - Anti-malware policy created."
 
 #Create Anti-Phishing Policy
 New-AntiPhishPolicy `
@@ -123,9 +179,13 @@ New-AntiPhishRule `
   -Enabled $true `
   -RecipientDomainIs (Get-AcceptedDomain).Name
 
+  Add-Content -Path $log -Value "  - Anti-phishing policy created."
+
 #Create ATP Mailbox
 New-Mailbox -Shared "ATP Mailbox" -DisplayName "ATP Mailbox" -Alias ATP
-$redirect = "atp@" + $domain
+$redirect = "atp@" + $primaryDomain
+
+Add-Content -Path $log -Value "  - Advanced Threat Protection (ATP) mailbox created."
 
 #Create Safe-Attachment Policy
 New-SafeAttachmentPolicy `
@@ -142,6 +202,8 @@ New-SafeAttachmentRule `
    -SafeAttachmentPolicy STS-SafeAttachPolicy `
    -Enabled $true `
    -RecipientDomainIs (Get-AcceptedDomain).Name
+
+   Add-Content -Path $log -Value "  - Safe-Attachment policy created."
 
 #Create Safe-Links Policy
 New-SafeLinksPolicy `
@@ -164,16 +226,7 @@ New-SafeLinksRule `
    -Enabled $true `
    -RecipientDomainIs (Get-AcceptedDomain).Name
 
-#Disable Protocols
-Get-CASMailboxPlan `
-  -Filter {ImapEnabled -eq "true" -or PopEnabled -eq "true" } `
-  | set-CASMailboxPlan -ImapEnabled $false -PopEnabled $false
-  
-Get-CASMailbox -Filter {ImapEnabled -eq "true" -or PopEnabled -eq "true" } `
-| Select-Object @{n = "Identity"; e = {$_.primarysmtpaddress}} `
-| Set-CASMailbox -ImapEnabled $false -PopEnabled $false
-
-Set-TransportConfig -SmtpClientAuthenticationDisabled $true
+   Add-Content -Path $log -Value "  - Safe-Link policy created."
 
 #Disable Powershell RM
 $role = Get-MsolRole `
@@ -197,16 +250,17 @@ foreach ($user in get-user -Filter { RemotePowerShellEnabled -eq "true" }) {
   }  
 }
 
-Write-Host "Remote Powershell access is something that is enabled by default for all users. New users will be enabled by default and will need to be disabled after they are created" `
-  -ForegroundColor Yellow 
-pause
-
+Add-Content -Path $log -Value "  - PowerShell Remote Management disabled for existing users; this will need to be completed for future users independently."
+Add-Content -Path $log -Value ""
+Add-Content -Path $log -Value "Purview settings changed:"
 #Turn on Auditing
 Set-OrganizationConfig -AuditDisabled $false
 Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $true
 
-#Disable automatic forwarding
-Set-RemoteDomain Default -AutoForwardEnabled $False
+Add-Content -Path $log -Value "  - Auditing enabled."
+Add-Content -Path $log -Value ""
+Add-Content -Path $log -Value "Optional settings changed:"
+
 
 $encryptOpt = Read-Host -Prompt 'Turn on Email Encryption? (Y/N)'
 if ($encryptOpt -contains 'Y') {
@@ -231,14 +285,37 @@ if ($encryptOpt -contains 'Y') {
         -ApplyOME $true `
         -ApplyRightsProtectionTemplate $Template
     pause
+    Add-Content -Path $log -Value "  - Email encryption enabled. The keywords 'encrypt', 'encrypted', or 'secure' can be used in the subject line to encrypt outbound email."
 }
 
-$DKIMopt = Read-Host -Prompt 'Turn on DKIM? (Y/N)'
-if ($DKIMopt -contains 'Y') {
-    New-DkimSigningConfig `
-        -DomainName $domain `
-        -KeySize 2048 `
-        -Enabled $true
-    Write-Host "DKIM records will also need to be added if the command failed."
-    pause
+$domainList = Get-MsolDomain | Select-Object Name
+foreach ($domain in $domainList.name) {
+  New-DkimSigningConfig `
+    -DomainName $domain `
+    -KeySize 2048 `
+    -Enabled $true
+    Add-Content -Path $log -Value "  - DKIM partially enabled. The following CNAMES need to be added, and DKIM must be manually enabled."
+    Add-Content -Path $log -Value ""
+  }
+
+  Add-Content -Path $log -Value "~~~~~~~~~~DKIM CONFIGURATION~~~~~~~~~~"
+  Add-Content -Path $log -Value "NOTE: These are CNAME records that need to be added."
+  Add-Content -Path $log -Value "---------------------------------------------------"
+  foreach ($domain in $domainList.name) {
+    Add-Content -Path $log -Value "DOMAIN:   $($domain)"
+    Add-Content -Path $log -Value ""
+    Add-Content -Path $log -Value "HOST:     Selector1._domainkey."
+    $s1DKIM = Get-DkimSigningConfig -Identity $domain | Select-Object -ExpandProperty Selector1CNAME
+    Add-Content -Path $log -Value "VALUE:    $($s1DKIM)"
+    Add-Content -Path $log -Value ""
+    Add-Content -Path $log -Value "HOST:     Selector2._domainkey."
+    $s2DKIM = Get-DkimSigningConfig -Identity $domain | Select-Object -ExpandProperty Selector1CNAME
+    Add-Content -Path $log -Value "VALUE:    $($s2DKIM)"
+    Add-Content -Path $log -Value "---------------------------------------------------"
+  }
+
+    Write-Host "DKIM records will need to be added. Check the LOG for details."
 }
+
+Write-Host "Tenant hardening complete." -ForegroundColor Green
+pause
