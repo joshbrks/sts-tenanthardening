@@ -18,10 +18,9 @@ Connect-MgGraph -Scopes "Policy.ReadWrite.Authorization"
 $log = "C:\temp\$PrimaryDomain - M365 INFO.log"
 if (Test-Path C:\temp) {  
   New-Item $log
-}
-else {
-  New-Item C:\temp\ -ItemType Directory
-  New-Item $log
+} else {
+    New-Item C:\temp\ -ItemType Directory
+    New-Item $log
 }
 
 Write-Host "LOG file will be created at $($log). Review this after completion."
@@ -31,7 +30,8 @@ Add-Content -Path $log -Value ""
 Add-Content -Path $log -Value "Organization settings changed:"
 
 #Disable user consent to apps
-Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions
+Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
+    "PermissionGrantPoliciesAssigned" = @() }
 Set-MsolCompanySettings -UsersPermissionToUserConsentToAppEnabled $False 
 Add-Content -Path $log -Value "  - Disabled user consent to apps"
 
@@ -44,8 +44,7 @@ $opt = Read-Host -Prompt 'Set passwords to never expire? (Y/N)'
 if ($opt -contains 'Y') {
   Get-msoluser | set-msoluser -PasswordNeverExpires $true
   Add-Content -Path $log -Value "  - Set password expiration policy to NEVER EXPIRE."
-}
-else {
+} else {
   Add-Content -Path $log -Value "  - Password expiration policy not changed."
 }
 
@@ -288,20 +287,23 @@ if ($encryptOpt -contains 'Y') {
     Add-Content -Path $log -Value "  - Email encryption enabled. The keywords 'encrypt', 'encrypted', or 'secure' can be used in the subject line to encrypt outbound email."
 }
 
+
+
 $domainList = Get-MsolDomain | Select-Object Name
 foreach ($domain in $domainList.name) {
   New-DkimSigningConfig `
     -DomainName $domain `
     -KeySize 2048 `
     -Enabled $true
-    Add-Content -Path $log -Value "  - DKIM partially enabled. The following CNAMES need to be added, and DKIM must be manually enabled."
-    Add-Content -Path $log -Value ""
-  }
+}
 
-  Add-Content -Path $log -Value "~~~~~~~~~~DKIM CONFIGURATION~~~~~~~~~~"
-  Add-Content -Path $log -Value "NOTE: These are CNAME records that need to be added."
-  Add-Content -Path $log -Value "---------------------------------------------------"
-  foreach ($domain in $domainList.name) {
+Add-Content -Path $log -Value "  - DKIM partially enabled. The following CNAMES need to be added, and DKIM must be manually enabled."
+Add-Content -Path $log -Value ""
+Add-Content -Path $log -Value "~~~~~~~~~~DKIM CONFIGURATION~~~~~~~~~~"
+Add-Content -Path $log -Value "NOTE: These are CNAME records that need to be added."
+Add-Content -Path $log -Value "---------------------------------------------------"
+
+foreach ($domain in $domainList.name) {
     Add-Content -Path $log -Value "DOMAIN:   $($domain)"
     Add-Content -Path $log -Value ""
     Add-Content -Path $log -Value "HOST:     Selector1._domainkey."
@@ -312,7 +314,10 @@ foreach ($domain in $domainList.name) {
     $s2DKIM = Get-DkimSigningConfig -Identity $domain | Select-Object -ExpandProperty Selector1CNAME
     Add-Content -Path $log -Value "VALUE:    $($s2DKIM)"
     Add-Content -Path $log -Value "---------------------------------------------------"
-  }
 
-    Write-Host "DKIM records will need to be added. Check the LOG for details."
+    
 }
+Write-Host "DKIM records will need to be added. Check the LOG for details."
+Write-Host ""
+Write-Host "Tenant hardening complete." -ForegroundColor Green
+pause
