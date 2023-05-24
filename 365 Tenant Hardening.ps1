@@ -316,6 +316,3 @@ foreach ($domain in $domainList.name) {
 
     Write-Host "DKIM records will need to be added. Check the LOG for details."
 }
-
-Write-Host "Tenant hardening complete." -ForegroundColor Green
-pause
