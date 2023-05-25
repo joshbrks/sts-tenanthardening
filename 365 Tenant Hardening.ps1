@@ -7,12 +7,10 @@ Write-Host ""
 Connect-AzureAD 
 $primaryDomain = ((Get-AzureADTenantDetail).verifieddomains | where {$_._default -eq $true}).name
 
-Install-Module -Name ExchangeOnlineManagement
 Install-Module MSOnline
 Import-Module MSOnline
-Connect-Exchangeonline
 Connect-MsolService
-Connect-MgGraph -Scopes "Policy.ReadWrite.Authorization"
+
 
 #Create LOG file and directory
 $global:log = "C:\temp\$PrimaryDomain - M365 INFO.log"
@@ -32,24 +30,34 @@ Add-Content -Path $global:log -Value "Organization settings changed:"
 #Set default Usage Location
 Set-MsolCompanySettings -DefaultUsageLocation US
 Add-Content -Path $global:log -Value "  - Set default usage location to US"
+Write-Host "  - Set default usage location to US" -ForegroundColor Green
 
 #Set Passwords to Never Expire
 $opt = Read-Host -Prompt 'Set passwords to never expire? (Y/N)'
 if ($opt -contains 'Y') {
   Get-msoluser | set-msoluser -PasswordNeverExpires $true
   Add-Content -Path $global:log -Value "  - Set password expiration policy to NEVER EXPIRE."
+  Write-Host "  - Set password expiration policy to NEVER EXPIRE." -ForegroundColor Green
 } else {
   Add-Content -Path $global:log -Value "  - Password expiration policy not changed."
+  Write-Host "  - Password expiration policy not changed." -ForegroundColor Green
 }
 
-function Enable-Hardening {
+function Disable-UserConsent {
   #Disable user consent to apps
+  Connect-MgGraph -Scopes "Policy.ReadWrite.Authorization"
   Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{
   "PermissionGrantPoliciesAssigned" = @() }
   Set-MsolCompanySettings -UsersPermissionToUserConsentToAppEnabled $False 
   Add-Content -Path $global:log -Value "  - Disabled user consent to apps"
-  
+  Write-Host "  - Disabled user consent to apps" -ForegroundColor Green
   Add-Content -Path $global:log -Value ""
+
+}
+
+function Set-EAC {
+  Install-Module -Name ExchangeOnlineManagement
+  Connect-Exchangeonline
   Add-Content -Path $global:log -Value "Exchange Admin Center settings changed:"
   
   #Disable Executable Content in Attachments
@@ -58,6 +66,7 @@ function Enable-Hardening {
   -StopRuleProcessing $true `
   -DeleteMessage $true
   Add-Content -Path $global:log -Value "  - Block Executable Content rule created."
+  Write-Host "  - Block Executable Content rule created." -ForegroundColor Green
   
   #Add External Source Disclaimer Message
   New-TransportRule `
@@ -71,6 +80,7 @@ function Enable-Hardening {
     -ApplyHtmlDisclaimerFallbackAction Wrap `
     -Comments "This rule adds an external email disclaimer." 
   Add-Content -Path $global:log -Value "  - External source disclaimer message rule added."
+  Write-Host "  - External source disclaimer message rule added." -ForegroundColor Green
     
   
   #Block OnMicrosoft Domains
@@ -82,6 +92,7 @@ function Enable-Hardening {
     -StopRuleProcessing $true `
     -Comments "Block Inbound Emails with onmicrosoft.com or mail.onmicrosoft.com Domains" -SenderDomainIs $BlockedDomains -DeleteMessage:$true
   Add-Content -Path $global:log -Value "  - Inbound 'OnMicrosoft.com' domain emails blocked."
+  Write-Host "  - Inbound 'OnMicrosoft.com' domain emails blocked." -ForegroundColor Green
     
   #Outbound Rule
   New-TransportRule `
@@ -112,8 +123,10 @@ function Enable-Hardening {
   Set-RemoteDomain Default -AutoForwardEnabled $False
   Add-Content -Path $global:log -Value "  - Automatic forwarding disabled for all users."
   Add-Content -Path $global:log -Value ""
+}
+
+function Set-Security {
   Add-Content -Path $global:log -Value "Security Admin settings changed:"
-  
   #Create Anti-Spam policy
   New-HostedContentFilterPolicy `
     -Name STS-SpamPolicy `
@@ -228,6 +241,9 @@ function Enable-Hardening {
   
      Add-Content -Path $global:log -Value "  - Safe-Link policy created."
   
+}
+
+function Disable-PowershellRM {
   #Disable Powershell RM
   $role = Get-MsolRole `
     -RoleName "company administrator"  
@@ -261,57 +277,49 @@ function Enable-Hardening {
   Add-Content -Path $global:log -Value ""
   Add-Content -Path $global:log -Value "Optional settings changed:"
   
-  $encryptOpt = Read-Host -Prompt 'Turn on Email Encryption? (Y/N)'
+}
 
-  if ($encryptOpt -contains 'Y') {
-    #Setup the RMS Template
-    Install-module -name AIPService 
-    Connect-AipService
-    Enable-AipService
-    $RMSConfig = Get-AIPServiceConfiguration   
-    $LicenseUri = $RMSConfig.LicensingIntranetDistributionPointUrl
-    Set-IRMConfiguration -LicensingLocation $LicenseUri
-    Set-IRMConfiguration -AzureRMSLicensingEnabled $true
-    Set-IRMConfiguration -InternalLicensingEnabled $true
+function Set-EmailEncryption {
+  #Setup the RMS Template
+  Install-module -name AIPService 
+  Connect-AipService
+  Enable-AipService
+  $RMSConfig = Get-AIPServiceConfiguration   
+  $LicenseUri = $RMSConfig.LicensingIntranetDistributionPointUrl
+  Set-IRMConfiguration -LicensingLocation $LicenseUri
+  Set-IRMConfiguration -AzureRMSLicensingEnabled $true
+  Set-IRMConfiguration -InternalLicensingEnabled $true
 
-    # Create the mail flow rule
-    $Name = "Apply Office 365 Message encryption"
-    $Words = "encrypt", "encrypted", "secure"
-    $Template = "Encrypt"
+  # Create the mail flow rule
+  $Name = "Apply Office 365 Message encryption"
+  $Words = "encrypt", "encrypted", "secure"
+  $Template = "Encrypt"
 
-    New-TransportRule `
-        -Name $Name `
-        -SubjectOrBodyContainsWords $Words `
-        -ApplyOME $true `
-        -ApplyRightsProtectionTemplate $Template
-    pause
+  New-TransportRule `
+    -Name $Name `
+    -SubjectOrBodyContainsWords $Words `
+    -ApplyOME $true `
+    -ApplyRightsProtectionTemplate $Template
     Add-Content -Path $global:log -Value "  - Email encryption enabled. The keywords 'encrypt', 'encrypted', or 'secure' can be used in the subject line to encrypt outbound email."
-  }
+}
 
-
-
+function Enable-DKIM {
   $domainList = Get-MsolDomain | Select-Object Name
+
   foreach ($domain in $domainList.name) {
-  New-DkimSigningConfig `
-    -DomainName $domain `
-    -KeySize 2048 `
-    -Enabled $true
+    New-DkimSigningConfig `
+      -DomainName $domain `
+      -KeySize 2048 `
+      -Enabled $true
   }
-}
 
-$deployType = Read-Host -Prompt 'Select type of configuration: SIMPLE or HARDENED'
-if ($deployType -contains "HARDENED") {
-  Enable-Hardening
-}
+  Add-Content -Path $global:log -Value "  - DKIM partially enabled. The following CNAMES need to be added, and DKIM must be manually enabled."
+  Add-Content -Path $global:log -Value ""
+  Add-Content -Path $global:log -Value "~~~~~~~~~~DKIM CONFIGURATION~~~~~~~~~~"
+  Add-Content -Path $global:log -Value "NOTE: These are CNAME records that need to be added."
+  Add-Content -Path $global:log -Value "---------------------------------------------------"
 
-
-Add-Content -Path $global:log -Value "  - DKIM partially enabled. The following CNAMES need to be added, and DKIM must be manually enabled."
-Add-Content -Path $global:log -Value ""
-Add-Content -Path $global:log -Value "~~~~~~~~~~DKIM CONFIGURATION~~~~~~~~~~"
-Add-Content -Path $global:log -Value "NOTE: These are CNAME records that need to be added."
-Add-Content -Path $global:log -Value "---------------------------------------------------"
-
-foreach ($domain in $domainList.name) {
+  foreach ($domain in $domainList.name) {
     Add-Content -Path $global:log -Value "DOMAIN:   $($domain)"
     Add-Content -Path $global:log -Value ""
     Add-Content -Path $global:log -Value "HOST:     Selector1._domainkey"
@@ -323,9 +331,29 @@ foreach ($domain in $domainList.name) {
     Add-Content -Path $global:log -Value "VALUE:    $($s2DKIM)"
     Add-Content -Path $global:log -Value "---------------------------------------------------"
     
+  }
+
+  Write-Host "DKIM records will need to be added. Check the LOG for details."
+
 }
 
-Write-Host "DKIM records will need to be added. Check the LOG for details."
+function Enable-Hardening {
+  Disable-UserConsent
+  Set-EAC
+  Set-Security
+  Disable-PowershellRM
+  $encryptOpt = Read-Host -Prompt 'Turn on Email Encryption? (Y/N)'
+  if ($encryptOpt -contains 'Y') {
+    Set-EmailEncryption
+  }
+  Enable-DKIM
+}
+
+$deployType = Read-Host -Prompt 'Select type of configuration: SIMPLE or HARDENED'
+if ($deployType -contains "HARDENED") {
+  Enable-Hardening
+}
+
 Write-Host ""
 Write-Host "Tenant configuration complete." -ForegroundColor Green
 pause
