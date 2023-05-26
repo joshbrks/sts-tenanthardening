@@ -1,17 +1,40 @@
 Write-Host "-----------------------------------------------" -Foregroundcolor white -BackgroundColor DarkCyan
-Write-Host "Welcome to the STS Tenant Configuration Script." -Foregroundcolor white -BackgroundColor DarkCyan
+Write-Host "Welcome to the STS Tenant Hardening Script." -Foregroundcolor white -BackgroundColor DarkCyan
 Write-Host "-----------------------------------------------" -Foregroundcolor white -BackgroundColor DarkCyan
 Write-Host ""
+
+Install-Module -Name ExchangeOnlineManagement
+Write-Host "Logging into the Exchange Online module..." -ForegroundColor Yellow
+Connect-Exchangeonline
+Write-Host "Success." -ForegroundColor DarkGreen
+
+#Enable Organization Customization
+Write-Host "Checking if tenant has been enabled for customization..." -ForegroundColor Yellow
+$status = Get-OrganizationConfig | fl IsDehydrated
+if ($status -contains "True") {
+  Write-Host "Attempting to dehydrate tenant..." -ForegroundColor Yellow
+  Enable-OrganizationCustomization
+  Write-Host "Tenant was not enabled. Please wait 60-90 minutes for tenant to upgrade before proceeding." -ForegroundColor Red
+  Pause
+  Write-Host "Exiting...." -ForegroundColor Red
+  Start-Sleep 5
+  Exit-PSSession
+} else {
+  Write-Host "Success." -ForegroundColor DarkGreen
+}
+
 
 #Obtain Primary Domain
 Write-Host "Logging into the Azure AD module..." -ForegroundColor Yellow
 Connect-AzureAD 
+Write-Host "Success." -ForegroundColor DarkGreen
 $primaryDomain = ((Get-AzureADTenantDetail).verifieddomains | where {$_._default -eq $true}).name
 
 Install-Module MSOnline
 Import-Module MSOnline
 Write-Host "Logging into the MS Online module..." -ForegroundColor Yellow
 Connect-MsolService
+Write-Host "Success." -ForegroundColor DarkGreen
 
 
 #Create LOG file and directory
@@ -28,9 +51,6 @@ pause
 Add-Content -Path $global:log -Value "~~~~~~~~TENANT CONFIGURATION LOG FOR $($primaryDomain)~~~~~~~~"
 Add-Content -Path $global:log -Value ""
 Add-Content -Path $global:log -Value "Organization settings changed:"
-
-#Enable Organization Customization
-Enable-OrganizationCustomization
 
 #Set default Usage Location
 Set-MsolCompanySettings -DefaultUsageLocation US
@@ -61,10 +81,9 @@ function Disable-UserConsent {
 }
 
 function Set-EAC {
-  Install-Module -Name ExchangeOnlineManagement
-  Write-Host "Logging into the Exchange Online module..." -ForegroundColor Yellow
-  Connect-Exchangeonline
+  
 
+  
   
 
   Add-Content -Path $global:log -Value "Exchange Admin Center settings changed:"
@@ -303,6 +322,7 @@ function Set-EmailEncryption {
   Install-module -name AIPService 
   Write-Host "Logging into the AIP module..." -ForegroundColor Yellow
   Connect-AipService
+  Write-Host "Success." -ForegroundColor DarkGreen
   Enable-AipService
   $RMSConfig = Get-AIPServiceConfiguration   
   $LicenseUri = $RMSConfig.LicensingIntranetDistributionPointUrl
@@ -360,22 +380,15 @@ function Enable-DKIM {
 
 }
 
-function Enable-Hardening {
-  Disable-UserConsent
-  Set-EAC
-  Set-Security
-  Disable-PowershellRM
-  $encryptOpt = Read-Host -Prompt 'Turn on Email Encryption? (Y/N)'
-  if ($encryptOpt -contains 'Y') {
-    Set-EmailEncryption
-  }
-  Enable-DKIM
+Disable-UserConsent
+Set-EAC
+Set-Security
+Disable-PowershellRM
+$encryptOpt = Read-Host -Prompt 'Turn on Email Encryption? (Y/N)'
+if ($encryptOpt -contains 'Y') {
+  Set-EmailEncryption
 }
-
-$deployType = Read-Host -Prompt 'Select type of configuration: SIMPLE or HARDENED'
-if ($deployType -contains "HARDENED") {
-  Enable-Hardening
-}
+Enable-DKIM
 
 Write-Host ""
 Write-Host "*****Tenant configuration complete.*******" -ForegroundColor Green
