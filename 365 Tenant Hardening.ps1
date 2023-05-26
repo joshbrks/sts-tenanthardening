@@ -4,11 +4,13 @@ Write-Host "-----------------------------------------------" -Foregroundcolor wh
 Write-Host ""
 
 #Obtain Primary Domain
+Write-Host "Logging into the Azure AD module..." -ForegroundColor Yellow
 Connect-AzureAD 
 $primaryDomain = ((Get-AzureADTenantDetail).verifieddomains | where {$_._default -eq $true}).name
 
 Install-Module MSOnline
 Import-Module MSOnline
+Write-Host "Logging into the MS Online module..." -ForegroundColor Yellow
 Connect-MsolService
 
 
@@ -27,20 +29,23 @@ Add-Content -Path $global:log -Value "~~~~~~~~TENANT CONFIGURATION LOG FOR $($pr
 Add-Content -Path $global:log -Value ""
 Add-Content -Path $global:log -Value "Organization settings changed:"
 
+#Enable Organization Customization
+Enable-OrganizationCustomization
+
 #Set default Usage Location
 Set-MsolCompanySettings -DefaultUsageLocation US
 Add-Content -Path $global:log -Value "  - Set default usage location to US"
-Write-Host "  - Set default usage location to US" -ForegroundColor Green
+Write-Host "Set default usage location to US" -ForegroundColor Green
 
 #Set Passwords to Never Expire
 $opt = Read-Host -Prompt 'Set passwords to never expire? (Y/N)'
 if ($opt -contains 'Y') {
   Get-msoluser | set-msoluser -PasswordNeverExpires $true
   Add-Content -Path $global:log -Value "  - Set password expiration policy to NEVER EXPIRE."
-  Write-Host "  - Set password expiration policy to NEVER EXPIRE." -ForegroundColor Green
+  Write-Host "Set password expiration policy to NEVER EXPIRE." -ForegroundColor Green
 } else {
   Add-Content -Path $global:log -Value "  - Password expiration policy not changed."
-  Write-Host "  - Password expiration policy not changed." -ForegroundColor Green
+  Write-Host "Password expiration policy not changed." -ForegroundColor Green
 }
 
 function Disable-UserConsent {
@@ -50,14 +55,18 @@ function Disable-UserConsent {
   "PermissionGrantPoliciesAssigned" = @() }
   Set-MsolCompanySettings -UsersPermissionToUserConsentToAppEnabled $False 
   Add-Content -Path $global:log -Value "  - Disabled user consent to apps"
-  Write-Host "  - Disabled user consent to apps" -ForegroundColor Green
+  Write-Host "Disabled user consent to apps" -ForegroundColor Green
   Add-Content -Path $global:log -Value ""
 
 }
 
 function Set-EAC {
   Install-Module -Name ExchangeOnlineManagement
+  Write-Host "Logging into the Exchange Online module..." -ForegroundColor Yellow
   Connect-Exchangeonline
+
+  
+
   Add-Content -Path $global:log -Value "Exchange Admin Center settings changed:"
   
   #Disable Executable Content in Attachments
@@ -66,7 +75,7 @@ function Set-EAC {
   -StopRuleProcessing $true `
   -DeleteMessage $true
   Add-Content -Path $global:log -Value "  - Block Executable Content rule created."
-  Write-Host "  - Block Executable Content rule created." -ForegroundColor Green
+  Write-Host "Block Executable Content rule created." -ForegroundColor Green
   
   #Add External Source Disclaimer Message
   New-TransportRule `
@@ -80,7 +89,7 @@ function Set-EAC {
     -ApplyHtmlDisclaimerFallbackAction Wrap `
     -Comments "This rule adds an external email disclaimer." 
   Add-Content -Path $global:log -Value "  - External source disclaimer message rule added."
-  Write-Host "  - External source disclaimer message rule added." -ForegroundColor Green
+  Write-Host "External source disclaimer message rule added." -ForegroundColor Green
     
   
   #Block OnMicrosoft Domains
@@ -92,7 +101,7 @@ function Set-EAC {
     -StopRuleProcessing $true `
     -Comments "Block Inbound Emails with onmicrosoft.com or mail.onmicrosoft.com Domains" -SenderDomainIs $BlockedDomains -DeleteMessage:$true
   Add-Content -Path $global:log -Value "  - Inbound 'OnMicrosoft.com' domain emails blocked."
-  Write-Host "  - Inbound 'OnMicrosoft.com' domain emails blocked." -ForegroundColor Green
+  Write-Host "Inbound 'OnMicrosoft.com' domain emails blocked." -ForegroundColor Green
     
   #Outbound Rule
   New-TransportRule `
@@ -105,6 +114,7 @@ function Set-EAC {
   -StopRuleProcessing $true `
   -Mode Enforce
   Add-Content -Path $global:log -Value "  - Outbound 'OnMicrosoft.com' domain emails blocked."
+  Write-Host "Outbound 'OnMicrosoft.com' domain emails blocked." -ForegroundColor Green
   
   #Disable Protocols
   Get-CASMailboxPlan `
@@ -118,10 +128,12 @@ function Set-EAC {
   Set-TransportConfig -SmtpClientAuthenticationDisabled $true
   
   Add-Content -Path $global:log -Value "  - IMAP, POP, and Authenticated SMTP disabled for all users."
+  Write-Host "IMAP, POP, and Authenticated SMTP disabled for all users." -ForegroundColor Green
   
   #Disable automatic forwarding
   Set-RemoteDomain Default -AutoForwardEnabled $False
-  Add-Content -Path $global:log -Value "  - Automatic forwarding disabled for all users."
+  Add-Content -Path $global:log -Value "  - Automatic email forwarding disabled for all users."
+  Write-Host "Automatic email forwarding disabled for all users." -ForegroundColor Green
   Add-Content -Path $global:log -Value ""
 }
 
@@ -154,6 +166,7 @@ function Set-Security {
     -Enabled $true
   
   Add-Content -Path $global:log -Value "  - Anti-spam policy created."
+  Write-Host "Anti-spam policy created." -ForegroundColor Green
   
   #Create Anti-Malware Policy
   New-MalwareFilterPolicy -Name STS-MalwarePolicy `
@@ -169,6 +182,7 @@ function Set-Security {
     -RecipientDomainIs (Get-AcceptedDomain).Name
   
   Add-Content -Path $global:log -Value "  - Anti-malware policy created."
+  Write-Host "Anti-malware policy created." -ForegroundColor Green
   
   #Create Anti-Phishing Policy
   New-AntiPhishPolicy `
@@ -193,12 +207,14 @@ function Set-Security {
     -RecipientDomainIs (Get-AcceptedDomain).Name
   
     Add-Content -Path $global:log -Value "  - Anti-phishing policy created."
+    Write-Host "Anti-phishing policy created." -ForegroundColor Green
   
   #Create ATP Mailbox
   New-Mailbox -Shared "ATP Mailbox" -DisplayName "ATP Mailbox" -Alias ATP
   $redirect = "atp@" + $primaryDomain
   
   Add-Content -Path $global:log -Value "  - Advanced Threat Protection (ATP) mailbox created."
+  Write-Host "Advanced Threat Protection (ATP) mailbox created." -ForegroundColor Green
   
   #Create Safe-Attachment Policy
   New-SafeAttachmentPolicy `
@@ -217,6 +233,7 @@ function Set-Security {
      -RecipientDomainIs (Get-AcceptedDomain).Name
   
      Add-Content -Path $global:log -Value "  - Safe-Attachment policy created."
+     Write-Host "Safe-Attachment policy created." -ForegroundColor Green
   
   #Create Safe-Links Policy
   New-SafeLinksPolicy `
@@ -240,6 +257,7 @@ function Set-Security {
      -RecipientDomainIs (Get-AcceptedDomain).Name
   
      Add-Content -Path $global:log -Value "  - Safe-Link policy created."
+     Write-Host "Safe-Links policy created." -ForegroundColor Green
   
 }
 
@@ -274,14 +292,16 @@ function Disable-PowershellRM {
   Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $true
   
   Add-Content -Path $global:log -Value "  - Auditing enabled."
+  Write-Host "Auditing enabled." -ForegroundColor Green
   Add-Content -Path $global:log -Value ""
-  Add-Content -Path $global:log -Value "Optional settings changed:"
+  Add-Content -Path $global:log -Value "Other settings changed:"
   
 }
 
 function Set-EmailEncryption {
   #Setup the RMS Template
   Install-module -name AIPService 
+  Write-Host "Logging into the AIP module..." -ForegroundColor Yellow
   Connect-AipService
   Enable-AipService
   $RMSConfig = Get-AIPServiceConfiguration   
@@ -301,6 +321,7 @@ function Set-EmailEncryption {
     -ApplyOME $true `
     -ApplyRightsProtectionTemplate $Template
     Add-Content -Path $global:log -Value "  - Email encryption enabled. The keywords 'encrypt', 'encrypted', or 'secure' can be used in the subject line to encrypt outbound email."
+    Write-Host "Email encryption enabled." -ForegroundColor Green
 }
 
 function Enable-DKIM {
@@ -312,6 +333,8 @@ function Enable-DKIM {
       -KeySize 2048 `
       -Enabled $true
   }
+
+  Write-Host "DKIM keys enabled." -ForegroundColor Green
 
   Add-Content -Path $global:log -Value "  - DKIM partially enabled. The following CNAMES need to be added, and DKIM must be manually enabled."
   Add-Content -Path $global:log -Value ""
@@ -355,5 +378,5 @@ if ($deployType -contains "HARDENED") {
 }
 
 Write-Host ""
-Write-Host "Tenant configuration complete." -ForegroundColor Green
+Write-Host "*****Tenant configuration complete.*******" -ForegroundColor Green
 pause
