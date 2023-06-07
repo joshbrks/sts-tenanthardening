@@ -3,7 +3,10 @@ Write-Host "Welcome to the STS Tenant Hardening Script." -Foregroundcolor white 
 Write-Host "-----------------------------------------------" -Foregroundcolor white -BackgroundColor DarkCyan
 Write-Host ""
 
-Install-Module -Name ExchangeOnlineManagement
+if (Get-Module -ListAvailable -Name ExchangeOnlineManagement) {
+} else {
+  Install-Module ExchangeOnlineManagement
+}
 Write-Host "Logging into the Exchange Online module..." -ForegroundColor Yellow
 Connect-Exchangeonline
 Write-Host "Success." -ForegroundColor DarkGreen
@@ -23,6 +26,40 @@ if ($status -contains "True") {
   Write-Host "Success." -ForegroundColor DarkGreen
 }
 
+#Get list of licenses available
+Write-Host "Checking licensing on tenant..." -ForegroundColor Yellow
+if (Get-Module -ListAvailable -Name Microsoft.Graph) {
+  } else {
+    Install-Module Microsoft.Graph
+  }
+Connect-MgGraph
+$licenses = Get-MgSubscribedSku | select SkuPartNumber,@{N='ActiveUnits';E={$_.PrepaidUnits.enabled}},ConsumedUnits
+
+#Check for Defender Licensing
+if (($licenses.SkuPartNumber -contains "O365_BUSINESS_PREMIUM") -or ($licenses.SkuPartNumber -contains "ATP_ENTERPRISE")) {
+    Write-Host "Defender licensing detected. Tenant can be hardened." -ForegroundColor Green
+    start-sleep 5
+} else {
+  Write-Host "Defender licensing not detected. You will not be able to harden this tenant until this is added." -ForegroundColor Red
+  start-sleep 5
+  Write-Host "This program will exit." -ForegroundColor Yellow
+  pause
+  exit
+}
+
+#Check for AIP Licensing
+if ($licenses.SkuPartNumber -notcontains "RIGHTSMANAGEMENT_CE") {
+  Write-Host "AIP licensing not detected. You will not be able to provision email encryption." -ForegroundColor Red
+  start-sleep 5
+  $AIP = $false
+} else {
+  Write-Host "AIP licensing detected. Email encryption can be provisioned." -ForegroundColor Green
+  start-sleep 5
+  $AIP = $true
+}
+
+Write-Host "NOTE: Ensure at least (1) Defender license and (1) AIP license (if applicable) has been assigned before continuing." -BackgroundColor Yellow -ForegroundColor Black
+pause
 
 #Obtain Primary Domain
 Write-Host "Logging into the Azure AD module..." -ForegroundColor Yellow
@@ -30,8 +67,10 @@ Connect-AzureAD
 Write-Host "Success." -ForegroundColor DarkGreen
 $primaryDomain = ((Get-AzureADTenantDetail).verifieddomains | where {$_._default -eq $true}).name
 
-Install-Module MSOnline
-Import-Module MSOnline
+if (Get-Module -ListAvailable -Name MSOnline) {
+} else {
+  Install-Module MSOnline
+}
 Write-Host "Logging into the MS Online module..." -ForegroundColor Yellow
 Connect-MsolService
 Write-Host "Success." -ForegroundColor DarkGreen
@@ -81,11 +120,6 @@ function Disable-UserConsent {
 }
 
 function Set-EAC {
-  
-
-  
-  
-
   Add-Content -Path $global:log -Value "Exchange Admin Center settings changed:"
   
   #Disable Executable Content in Attachments
@@ -318,8 +352,13 @@ function Disable-PowershellRM {
 }
 
 function Set-EmailEncryption {
+  if (Get-Module -ListAvailable -Name AIPService) {
+  } else {
+    Install-module -name AIPService -Force
+  }
+  
   #Setup the RMS Template
-  Install-module -name AIPService 
+
   Write-Host "Logging into the AIP module..." -ForegroundColor Yellow
   Connect-AipService
   Write-Host "Success." -ForegroundColor DarkGreen
@@ -384,8 +423,7 @@ Disable-UserConsent
 Set-EAC
 Set-Security
 Disable-PowershellRM
-$encryptOpt = Read-Host -Prompt 'Turn on Email Encryption? (Y/N)'
-if ($encryptOpt -contains 'Y') {
+if ($AIP) {
   Set-EmailEncryption
 }
 Enable-DKIM
